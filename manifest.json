@@ -1,0 +1,10 @@
+{
+	"id": "merge-and-add-alias",
+	"name": "Merge and Add Alias",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Merge files while automatically updating all references with aliases and adding the alias to frontmatter",
+	"author": "Your Name",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}

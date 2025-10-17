@@ -1,0 +1,12 @@
+# npm
+node_modules
+
+# build
+build/
+
+# obsidian
+data.json
+
+# IDE
+.DS_Store
+.idea/
