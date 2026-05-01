@@ -17,6 +17,25 @@ export default class MergeAndAddAliasPlugin extends Plugin {
 				}
 			})
 		);
+
+		this.addCommand({
+			id: 'merge-current-file-and-add-alias',
+			name: 'Merge current file and add alias',
+			checkCallback: (checking: boolean) => {
+				const activeFile = this.app.workspace.getActiveFile();
+				const canRun = activeFile instanceof TFile && activeFile.extension === 'md';
+
+				if (!canRun) {
+					return false;
+				}
+
+				if (!checking && activeFile) {
+					void this.mergeFileWithAlias(activeFile);
+				}
+
+				return true;
+			},
+		});
 	}
 
 	async mergeFileWithAlias(sourceFile: TFile) {

@@ -28,6 +28,8 @@ When you merge File A into File B:
 2. Select **"Merge into and add alias"**
 3. Choose the target file using fuzzy search
 
+You can also run **"Merge current file and add alias"** from the command palette while the note you want to merge is active.
+
 ## Installation
 
 ### Manual Installation
