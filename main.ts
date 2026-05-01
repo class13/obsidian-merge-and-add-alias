@@ -1,4 +1,4 @@
-import { App, Plugin, TFile, Notice, FuzzySuggestModal } from 'obsidian';
+import { App, Plugin, TFile, Notice, FuzzySuggestModal, getFrontMatterInfo, parseYaml, stringifyYaml } from 'obsidian';
 
 export default class MergeAndAddAliasPlugin extends Plugin {
 	async onload() {
@@ -30,16 +30,28 @@ export default class MergeAndAddAliasPlugin extends Plugin {
 			const sourceFileName = sourceFile.basename;
 			const targetFileName = targetFile.basename;
 
-			// Get content of both files
 			const sourceContent = await this.app.vault.read(sourceFile);
 			const targetContent = await this.app.vault.read(targetFile);
+			const sourceParts = this.parseNoteContent(sourceContent);
+			const targetParts = this.parseNoteContent(targetContent);
 
-			// Append source content to target
-			const newTargetContent = targetContent + '\n\n' + sourceContent;
+			const mergedFrontmatter = this.mergeFrontmatter(targetParts.frontmatter, sourceParts.frontmatter);
+			const mergedAliases = this.mergeAliasValues(
+				this.getAliasValues(mergedFrontmatter),
+				[sourceFileName]
+			);
+
+			if (mergedAliases.length > 0) {
+				mergedFrontmatter.aliases = mergedAliases;
+			}
+
+			if (mergedFrontmatter.alias !== undefined) {
+				delete mergedFrontmatter.alias;
+			}
+
+			const mergedBody = this.mergeBodies(targetParts.body, sourceParts.body);
+			const newTargetContent = this.buildNoteContent(mergedFrontmatter, mergedBody);
 			await this.app.vault.modify(targetFile, newTargetContent);
-
-			// Add source filename as alias to target file's frontmatter
-			await this.addAliasToFrontmatter(targetFile, sourceFileName);
 
 			// Replace all links to source file with aliased links
 			await this.replaceLinksWithAliases(sourceFileName, targetFileName);
@@ -54,33 +66,185 @@ export default class MergeAndAddAliasPlugin extends Plugin {
 		}
 	}
 
-	async addAliasToFrontmatter(file: TFile, alias: string) {
-		await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-			// Get existing aliases
-			let aliases = frontmatter['aliases'] || frontmatter['alias'];
+	parseNoteContent(content: string): { frontmatter: Record<string, unknown>; body: string } {
+		const info = getFrontMatterInfo(content);
 
-			// Convert to array if needed
-			if (!aliases) {
-				aliases = [];
-			} else if (typeof aliases === 'string') {
-				aliases = [aliases];
-			} else if (!Array.isArray(aliases)) {
-				aliases = [aliases];
+		if (!info.exists) {
+			return {
+				frontmatter: {},
+				body: content.trim(),
+			};
+		}
+
+		const parsed = parseYaml(info.frontmatter) ?? {};
+
+		return {
+			frontmatter: this.isPlainObject(parsed) ? parsed : {},
+			body: content.slice(info.contentStart).trim(),
+		};
+	}
+
+	mergeFrontmatter(
+		targetFrontmatter: Record<string, unknown>,
+		sourceFrontmatter: Record<string, unknown>
+	): Record<string, unknown> {
+		const merged = this.mergeValues(targetFrontmatter, sourceFrontmatter);
+
+		if (!this.isPlainObject(merged)) {
+			return {};
+		}
+
+		const aliases = this.mergeAliasValues(
+			this.getAliasValues(targetFrontmatter),
+			this.getAliasValues(sourceFrontmatter)
+		);
+
+		if (aliases.length > 0) {
+			merged.aliases = aliases;
+		}
+
+		if (merged.alias !== undefined) {
+			delete merged.alias;
+		}
+
+		return merged;
+	}
+
+	mergeValues(targetValue: unknown, sourceValue: unknown): unknown {
+		if (targetValue === undefined) {
+			return this.cloneValue(sourceValue);
+		}
+
+		if (sourceValue === undefined) {
+			return this.cloneValue(targetValue);
+		}
+
+		if (Array.isArray(targetValue) || Array.isArray(sourceValue)) {
+			return this.mergeArrays(targetValue, sourceValue);
+		}
+
+		if (this.isPlainObject(targetValue) && this.isPlainObject(sourceValue)) {
+			const merged: Record<string, unknown> = {};
+			const keys = new Set([...Object.keys(targetValue), ...Object.keys(sourceValue)]);
+
+			for (const key of keys) {
+				merged[key] = this.mergeValues(targetValue[key], sourceValue[key]);
 			}
 
-			// Add new alias if not already present
-			if (!aliases.includes(alias)) {
-				aliases.push(alias);
+			return merged;
+		}
+
+		return this.cloneValue(targetValue);
+	}
+
+	mergeArrays(targetValue: unknown, sourceValue: unknown): unknown[] {
+		const targetArray = Array.isArray(targetValue) ? targetValue : targetValue === undefined ? [] : [targetValue];
+		const sourceArray = Array.isArray(sourceValue) ? sourceValue : sourceValue === undefined ? [] : [sourceValue];
+		const merged: unknown[] = [];
+		const seen = new Set<string>();
+
+		for (const item of [...targetArray, ...sourceArray]) {
+			const clonedItem = this.cloneValue(item);
+			const key = JSON.stringify(clonedItem);
+
+			if (seen.has(key)) {
+				continue;
 			}
 
-			// Set the aliases property
-			frontmatter['aliases'] = aliases;
+			seen.add(key);
+			merged.push(clonedItem);
+		}
 
-			// Remove 'alias' property if it exists (consolidate to 'aliases')
-			if (frontmatter['alias']) {
-				delete frontmatter['alias'];
+		return merged;
+	}
+
+	getAliasValues(frontmatter: Record<string, unknown>): string[] {
+		return this.normalizeAliasList(frontmatter.aliases ?? frontmatter.alias);
+	}
+
+	mergeAliasValues(targetAliases: string[], sourceAliases: string[]): string[] {
+		const merged: string[] = [];
+		const seen = new Set<string>();
+
+		for (const alias of [...targetAliases, ...sourceAliases]) {
+			const normalizedAlias = alias.trim();
+			if (!normalizedAlias) {
+				continue;
 			}
-		});
+
+			const key = normalizedAlias.toLocaleLowerCase();
+			if (seen.has(key)) {
+				continue;
+			}
+
+			seen.add(key);
+			merged.push(normalizedAlias);
+		}
+
+		return merged;
+	}
+
+	normalizeAliasList(value: unknown): string[] {
+		if (value === undefined || value === null) {
+			return [];
+		}
+
+		const aliasItems = Array.isArray(value) ? value : [value];
+
+		return aliasItems
+			.filter((item): item is string | number | boolean => ['string', 'number', 'boolean'].includes(typeof item))
+			.map((item) => String(item).trim())
+			.filter((item) => item.length > 0);
+	}
+
+	mergeBodies(targetBody: string, sourceBody: string): string {
+		if (!targetBody) {
+			return sourceBody;
+		}
+
+		if (!sourceBody) {
+			return targetBody;
+		}
+
+		return `${targetBody}\n\n${sourceBody}`;
+	}
+
+	buildNoteContent(frontmatter: Record<string, unknown>, body: string): string {
+		const hasFrontmatter = Object.keys(frontmatter).length > 0;
+		const normalizedBody = body.trim();
+
+		if (!hasFrontmatter) {
+			return normalizedBody;
+		}
+
+		const yaml = stringifyYaml(frontmatter).trimEnd();
+		if (!normalizedBody) {
+			return `---\n${yaml}\n---`;
+		}
+
+		return `---\n${yaml}\n---\n\n${normalizedBody}`;
+	}
+
+	cloneValue(value: unknown): unknown {
+		if (Array.isArray(value)) {
+			return value.map((item) => this.cloneValue(item));
+		}
+
+		if (this.isPlainObject(value)) {
+			const cloned: Record<string, unknown> = {};
+
+			for (const [key, nestedValue] of Object.entries(value)) {
+				cloned[key] = this.cloneValue(nestedValue);
+			}
+
+			return cloned;
+		}
+
+		return value;
+	}
+
+	isPlainObject(value: unknown): value is Record<string, unknown> {
+		return typeof value === 'object' && value !== null && !Array.isArray(value);
 	}
 
 	async replaceLinksWithAliases(oldFileName: string, newFileName: string) {

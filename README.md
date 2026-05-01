@@ -13,13 +13,14 @@ An Obsidian plugin that merges two markdown files while automatically updating a
 
 When you merge File A into File B:
 
-1. File A's content is appended to File B
-2. "File A" is added as an alias in File B's frontmatter
-3. All links are updated throughout your vault:
+1. File A's frontmatter is merged into File B's frontmatter
+2. `aliases` from both files are combined, and "File A" is added as an alias in File B
+3. File A's body content is appended to File B without duplicating File A's frontmatter in the note body
+4. All links are updated throughout your vault:
    - `[[File A]]` → `[[File B|File A]]`
    - `[[File A|Custom]]` → `[[File B|Custom]]`
    - `[[File A#heading]]` → `[[File B#heading|File A]]`
-4. File A is deleted
+5. File A is deleted
 
 ## Usage
 
